@@ -4,12 +4,18 @@
 # 默认使用coding。
 
 # 必须输入分支名
-if [[ $# -ne 1 ]]; then
-    log "请输入分支名称";
+if [[ $# -lt 1 ]]; then
+    echo "usage: sh package.sh <branch>";
     exit 1;
 fi
 
-branch=$1;
+BRANCH=$1;
+
+if [[ $RELEASE_VERSION = "" ]];then
+    RELEASE_VERSION=$(git describe --tags head);
+fi
+
+echo "当前发行版:$RELEASE_VERSION";
 ################################################################################
 
 UI_URL="git@codeup.aliyun.com:64456b71e87627b0f990c565/code/media-ui.git";
@@ -29,9 +35,9 @@ LIB_DIR=$APP_DIR/lib;
 LIB_SOURCE_DIR=$WORK_DIR/media/application/target/dependency;
 CURRENT_DATE=$(date '+%Y.%m.%d');
 #包名，格式为模块名-分支名-主版本号-修订号-日期，应用的修订号包含前后台修订号，命令行只包含后台修订号
-CLI_JAR_NAME=cli-$branch;
+CLI_JAR_NAME=cli-$BRANCH;
 CLI_JAR="";
-APP_JAR_NAME=media-$branch;
+APP_JAR_NAME=media-$BRANCH;
 APP_JAR="";
 JAVA_COMMAND="java -Dspring.profiles.active=prd,cli";
 #命令行主类
@@ -45,8 +51,6 @@ VERSION_CLIENT="";
 #后台版本
 REVISION_SERVER="";
 VERSION_SERVER="";
-#主版本号
-MAIN_VERSION="";
 ################################################################################
 # 预定义函数
 # 输出日志，同时在控制台和文件中展示
@@ -111,15 +115,15 @@ mkdir $APP_DIR;
 ################################################################################
 startWork "拉取代码";
 
-log "分支名称:$branch";
+log "分支名称:$BRANCH";
 
-git clone -b $branch --depth 1 $UI_URL;
+git clone -b $BRANCH --depth 1 $UI_URL;
 runStatus $?;
 # 手动复制demo文件
 cp -v $UI_DIR/src/pages/demo/index.tsx.backup $UI_DIR/src/pages/demo/index.tsx
 runStatus $?;
 
-git clone -b $branch --depth 1 $SERVER_URL;
+git clone -b $BRANCH --depth 1 $SERVER_URL;
 runStatus $?;
 
 log "创建静态文件目录";
@@ -141,7 +145,7 @@ runStatus $?;
 log "设置后台代码版本";
 cd $SERVER_DIR;
 runStatus $?;
-REVISION_SERVER=$(git rev-parse --short $branch);
+REVISION_SERVER=$(git rev-parse --short $BRANCH);
 VERSION_SERVER=$(git tag --contains $REVISION_SERVER);
 touch "application/src/main/resources/static/server-$REVISION_SERVER";
 runStatus $?;
@@ -151,7 +155,7 @@ runStatus $?;
 log "设置前台代码版本"
 cd $UI_DIR;
 runStatus $?;
-REVISION_UI=$(git rev-parse --short $branch);
+REVISION_UI=$(git rev-parse --short $BRANCH);
 VERSION_CLIENT=$(git tag --contains $REVISION_UI);
 touch "$SERVER_DIR/application/src/main/resources/static/ui-$REVISION_UI";
 runStatus $?;
@@ -159,9 +163,7 @@ runStatus $?;
 log "设置版本号";
 cd $SERVER_DIR;
 runStatus $?;
-MAIN_VERSION=$(cat main-version);
-runStatus $?;
-echo "main=v$MAIN_VERSION" >> "config/src/main/resources/version.properties";
+echo "main=v$RELEASE_VERSION" >> "config/src/main/resources/version.properties";
 echo "server=$VERSION_SERVER" >> "config/src/main/resources/version.properties";
 echo "client=$VERSION_CLIENT" >> "config/src/main/resources/version.properties";
 more config/src/main/resources/version.properties;
@@ -210,9 +212,9 @@ endWork "编译打包";
 startWork "复制依赖包";
 
 log "移动jar包";
-APP_JAR=$APP_JAR_NAME-$MAIN_VERSION-$REVISION_SERVER-$REVISION_UI.jar;
+APP_JAR=$APP_JAR_NAME-$RELEASE_VERSION-$REVISION_SERVER-$REVISION_UI.jar;
 echo "web程序jar包:$APP_JAR";
-CLI_JAR=$CLI_JAR_NAME-$MAIN_VERSION-$REVISION_SERVER.jar;
+CLI_JAR=$CLI_JAR_NAME-$RELEASE_VERSION-$REVISION_SERVER.jar;
 echo "命令行程序jar包:$CLI_JAR";
 mv -v $SERVER_DIR/application/target/*.jar $APP_DIR/$APP_JAR;
 runStatus $?;
