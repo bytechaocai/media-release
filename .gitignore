@@ -10,3 +10,6 @@ node_modules/
 
 # 日志文件
 *.log
+
+# 其他脚本文件
+*.bat
