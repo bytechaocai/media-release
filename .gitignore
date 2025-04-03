@@ -1,0 +1,12 @@
+# 打包后的目录
+app/
+
+# 代码目录
+media/
+media-ui
+
+# 前端依赖
+node_modules/
+
+# 日志文件
+*.log
