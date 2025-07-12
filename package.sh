@@ -249,7 +249,7 @@ log "创建应用启动脚本";
 
 cd $APP_DIR;
 runStatus $?;
-echo "$JAVA_COMMAND -cp $APP_JAR com.sheepfly.media.application.MediaApplication" >> start-media.bat;
+echo "$JAVA_COMMAND -cp $APP_JAR com.sheepfly.media.application.MediaApplication" >> media.bat;
 runStatus $?;
 log "创建命令行启动脚本";
 for item in $CLI_MAIN_CLASS; do
