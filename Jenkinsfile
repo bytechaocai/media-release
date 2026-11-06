@@ -1,97 +1,5 @@
-def TOOL_CHECKS = [
-    'git' : [cmd: 'git --version', min: [2, 0]],
-    'java': [cmd: 'java -version', min: [8, 0]],
-    'mvn' : [cmd: 'mvn -v', min: [3, 6]],
-    'node': [cmd: 'node -v', min: [14, 0]],
-    'npm' : [cmd: 'npm -v', min: [6, 0]]
-]
-
 def MODULES = ['common', 'service', 'web', 'dataaccess', 'config']
-
 def CLI_MAIN_CLASSES = ['LoadSingleFile', 'LoadDirectory']
-
-
-def checkEnvironment() {
-    echo "构建节点: ${env.NODE_NAME}"
-    echo "工作目录: ${env.WORKSPACE}"
-    echo "执行平台: ${isUnix() ? 'Unix' : 'Windows'}"
-
-    try {
-        sh(script: 'sh -c "echo shell-ok"', returnStdout: true)
-    } catch (ignored) {
-        error('未找到 sh，Windows 节点必须安装 Git Bash 并将 sh 加入 PATH')
-    }
-
-    def versionChecks = [:]
-    TOOL_CHECKS.each { name, spec ->
-        versionChecks[name] = {
-            checkToolVersion(name, spec.cmd, spec.min)
-        }
-    }
-    parallel versionChecks
-
-    def writable = sh(script: 'test -w . && echo yes || echo no', returnStdout: true).trim()
-    if (writable != 'yes') {
-        error("工作目录不可写: ${env.WORKSPACE}")
-    }
-
-    if (env.JAVA_HOME) {
-        def javaHome = shellPath(env.JAVA_HOME)
-        def exists = sh(script: "test -d '${javaHome}' && echo yes || echo no", returnStdout: true).trim()
-        if (exists != 'yes') {
-            error("JAVA_HOME 指向的目录不存在: ${env.JAVA_HOME}")
-        }
-        echo "JAVA_HOME: ${env.JAVA_HOME}"
-    } else {
-        echo 'JAVA_HOME 未设置，使用 PATH 中的 java'
-    }
-
-    def m2Exists = sh(script: 'test -d "$HOME/.m2/repository" && echo yes || echo no', returnStdout: true).trim()
-    if (m2Exists == 'yes') {
-        echo 'Maven 本地仓库: $HOME/.m2/repository'
-    } else {
-        echo '警告: 未找到 Maven 本地仓库 $HOME/.m2/repository，构建时会重新下载依赖'
-    }
-
-    ['media', 'media-ui', 'app'].each { name ->
-        echo "工作目录 ${name}: ${fileExists(name) ? '已存在，构建时将重建' : '不存在，构建时创建'}"
-    }
-}
-
-def checkToolVersion(String name, String command, List minVersion) {
-    def output = sh(script: "${command} 2>&1", returnStdout: true).trim()
-    if (!output) {
-        error("无法获取 ${name} 版本，请确认 ${name} 已安装并在 PATH 中")
-    }
-    def matcher = (output =~ /(\d+)\.(\d+)/)
-    if (!matcher.find()) {
-        error("无法解析 ${name} 版本: ${output}")
-    }
-    def major = Integer.parseInt(matcher.group(1))
-    def minor = Integer.parseInt(matcher.group(2))
-    if (name == 'java' && major == 1) {
-        major = minor
-        minor = 0
-    }
-    def actual = output.readLines()[0].trim()
-    echo "${name}: ${actual}（要求 >= ${minVersion[0]}.${minVersion[1]}）"
-    if (major < minVersion[0] || (major == minVersion[0] && minor < minVersion[1])) {
-        error("${name} 版本过低，当前 ${actual}，要求 >= ${minVersion[0]}.${minVersion[1]}")
-    }
-}
-
-def shellPath(String path) {
-    if (!path) {
-        return path
-    }
-    if (!isUnix()) {
-        def converted = sh(script: "cygpath -u '${path}' 2>/dev/null || true", returnStdout: true).trim()
-        if (converted) {
-            return converted
-        }
-    }
-    return path
-}
 
 def checkoutRepo(String targetDir, String repoUrl, String branch) {
     def remote = [url: repoUrl]
@@ -245,18 +153,10 @@ pipeline {
         string(name: 'UI_REPO', defaultValue: 'git@github.com:bytechaocai/media-ui.git', description: '前端代码仓库')
         string(name: 'RELEASE_VERSION', defaultValue: '', description: '发行版号。留空时使用 git describe --tags HEAD')
         string(name: 'CREDENTIALS_ID', defaultValue: '', description: '拉取代码的凭据 ID。留空时使用构建节点上的 SSH key')
-        string(name: 'AGENT_LABEL', defaultValue: 'windows', description: '构建节点标签，节点需安装 Git Bash 并将 sh 加入 PATH')
+        string(name: 'AGENT_LABEL', defaultValue: 'linux', description: '构建节点标签')
     }
 
     stages {
-        stage('环境检查') {
-            steps {
-                script {
-                    checkEnvironment()
-                }
-            }
-        }
-
         stage('清理工作目录') {
             steps {
                 script {
