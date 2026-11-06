@@ -231,7 +231,7 @@ def createStartScripts() {
 
 
 pipeline {
-    agent { label "${params.AGENT_LABEL ?: 'windows'}" }
+    agent any
 
     options {
         disableConcurrentBuilds()
