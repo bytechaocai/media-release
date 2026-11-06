@@ -18,8 +18,8 @@ fi
 echo "当前发行版:$RELEASE_VERSION";
 ################################################################################
 
-UI_URL="git@codeup.aliyun.com:64456b71e87627b0f990c565/code/media-ui.git";
-SERVER_URL="git@codeup.aliyun.com:64456b71e87627b0f990c565/code/media.git";
+UI_URL="git@github.com:bytechaocai/media-ui.git";
+SERVER_URL="git@github.com:bytechaocai/media.git";
 MODULE="common service web dataaccess config"
 #当前目录的绝对路径，用来定位
 WORK_DIR=$(pwd);
