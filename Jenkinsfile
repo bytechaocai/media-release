@@ -1,6 +1,3 @@
-def MODULES = ['common', 'service', 'web', 'dataaccess', 'config']
-def CLI_MAIN_CLASSES = ['LoadSingleFile', 'LoadDirectory']
-
 def checkoutRepo(String targetDir, String repoUrl, String branch) {
     def remote = [url: repoUrl]
     def credentialsId = params.CREDENTIALS_ID?.trim()
@@ -87,8 +84,11 @@ def buildUi() {
             error('缺少 src/pages/demo/index.tsx.backup，无法复制 demo 页面')
         }
         sh 'cp src/pages/demo/index.tsx.backup src/pages/demo/index.tsx'
-        sh 'npm install --no-audit --no-fund'
-        sh 'npm run build'
+        def npmRegistry = params.NPM_REGISTRY?.trim() ?: 'https://registry.npmjs.org/'
+        withEnv(["NPM_CONFIG_REGISTRY=${npmRegistry}"]) {
+            sh 'yarn install'
+            sh 'yarn run build'
+        }
         if (!fileExists('dist')) {
             error('前端构建未生成 dist 目录')
         }
@@ -99,6 +99,7 @@ def buildUi() {
 }
 
 def assemble() {
+    def modules = ['common', 'service', 'web', 'dataaccess', 'config']
     def appJar = "media-${params.BRANCH}-${env.BUILD_VERSION}-${env.SERVER_REVISION}-${env.UI_REVISION}.jar"
     def cliJar = "cli-${params.BRANCH}-${env.BUILD_VERSION}-${env.SERVER_REVISION}.jar"
     env.APP_JAR = appJar
@@ -114,13 +115,10 @@ def assemble() {
             sh "mv media/cli/target/*.jar app/${cliJar}"
         },
         'Maven 依赖': {
-            dir('media/application') {
-                sh 'mvn -B dependency:copy-dependencies'
-            }
             sh 'mv media/application/target/dependency/* app/lib/'
         },
         '模块 jar': {
-            MODULES.each { module ->
+            modules.each { module ->
                 sh "mv media/${module}/target/*.jar app/lib/"
             }
         }
@@ -128,10 +126,11 @@ def assemble() {
 }
 
 def createStartScripts() {
+    def cliMainClasses = ['LoadSingleFile', 'LoadDirectory']
     def javaCommand = 'java -Dspring.profiles.active=prd,cli'
     dir('app') {
         writeFile file: 'media.bat', text: "${javaCommand} -cp ${env.APP_JAR} com.sheepfly.media.application.MediaApplication\r\n"
-        CLI_MAIN_CLASSES.each { mainClass ->
+        cliMainClasses.each { mainClass ->
             writeFile file: "${mainClass}.bat", text: "${javaCommand} -Dmodule=${mainClass} -cp ${env.CLI_JAR} com.sheepfly.media.cli.${mainClass} %*\r\n"
         }
     }
@@ -154,6 +153,7 @@ pipeline {
         string(name: 'RELEASE_VERSION', defaultValue: '', description: '发行版号。留空时使用 git describe --tags HEAD')
         string(name: 'CREDENTIALS_ID', defaultValue: '', description: '拉取代码的凭据 ID。留空时使用构建节点上的 SSH key')
         string(name: 'AGENT_LABEL', defaultValue: 'linux', description: '构建节点标签')
+        string(name: 'NPM_REGISTRY', defaultValue: 'https://registry.npmjs.org/', description: 'npm 镜像地址，默认使用 npm 官方源')
     }
 
     stages {
@@ -201,7 +201,12 @@ pipeline {
                         '前端构建': {
                             buildUi()
                         },
-                        '后端依赖': {
+                        '后端编译': {
+                            dir('media') {
+                                sh 'mvn -B -Dfile.encoding=UTF-8 -Dmaven.test.skip=true compile'
+                            }
+                        },
+                        'Maven 依赖复制': {
                             dir('media/application') {
                                 sh 'mvn -B dependency:copy-dependencies'
                             }
@@ -211,14 +216,21 @@ pipeline {
             }
         }
 
-        stage('后端打包') {
+        stage('复制前端产物') {
             steps {
                 script {
                     dir('media/application/src/main/resources/static') {
                         unstash 'ui-dist'
                     }
+                }
+            }
+        }
+
+        stage('后端打包') {
+            steps {
+                script {
                     dir('media') {
-                        sh 'mvn -B -Dfile.encoding=UTF-8 -Dmaven.test.skip=true install'
+                        sh 'mvn -B -Dfile.encoding=UTF-8 -Dmaven.test.skip=true package'
                     }
                 }
             }
