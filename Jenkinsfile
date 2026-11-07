@@ -1,9 +1,5 @@
 def checkoutRepo(String targetDir, String repoUrl, String branch) {
     def remote = [url: repoUrl]
-    def credentialsId = params.CREDENTIALS_ID?.trim()
-    if (credentialsId) {
-        remote.credentialsId = credentialsId
-    }
     dir(targetDir) {
         checkout([
             $class: 'GitSCM',
@@ -151,8 +147,6 @@ pipeline {
         string(name: 'SERVER_REPO', defaultValue: 'git@github.com:bytechaocai/media.git', description: '后端代码仓库')
         string(name: 'UI_REPO', defaultValue: 'git@github.com:bytechaocai/media-ui.git', description: '前端代码仓库')
         string(name: 'RELEASE_VERSION', defaultValue: '', description: '发行版号。留空时使用 git describe --tags HEAD')
-        string(name: 'CREDENTIALS_ID', defaultValue: '', description: '拉取代码的凭据 ID。留空时使用构建节点上的 SSH key')
-        string(name: 'AGENT_LABEL', defaultValue: 'linux', description: '构建节点标签')
         string(name: 'NPM_REGISTRY', defaultValue: 'https://registry.npmjs.org/', description: 'npm 镜像地址，默认使用 npm 官方源')
     }
 
