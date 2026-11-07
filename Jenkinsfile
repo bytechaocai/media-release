@@ -11,12 +11,12 @@ def checkoutRepo(String targetDir, String repoUrl, String branch) {
 }
 
 def prepareVersion() {
-    def buildVersion = params.RELEASE_VERSION?.trim()
+    def buildVersion = params.releaseVersion?.trim()
     if (!buildVersion) {
         buildVersion = sh(script: 'git describe --tags HEAD 2>/dev/null || true', returnStdout: true).trim()
     }
     if (!buildVersion) {
-        error('无法通过 git describe 获取发行版号，请在 RELEASE_VERSION 参数中指定')
+        error('无法通过 git describe 获取发行版号，请在 releaseVersion 参数中指定')
     }
 
     def serverRevision = sh(script: 'git -C media rev-parse --short HEAD', returnStdout: true).trim()
@@ -44,7 +44,7 @@ def prepareVersion() {
     sh 'cp media/releasenote.html media/application/src/main/resources/static/'
     sh 'cp media-ui/releasenote-ui.html media/application/src/main/resources/static/'
 
-    currentBuild.description = "${params.BRANCH} | ${buildVersion} | server=${serverRevision} ui=${uiRevision}"
+    currentBuild.description = "${params.branch} | ${buildVersion} | server=${serverRevision} ui=${uiRevision}"
 }
 
 def writeVersionProperties(String buildVersion, String serverVersion, String uiVersion) {
@@ -75,29 +75,57 @@ def writeVersionMarkers(String serverRevision, String uiRevision) {
 }
 
 def buildUi() {
-    dir('media-ui') {
-        if (!fileExists('src/pages/demo/index.tsx.backup')) {
-            error('缺少 src/pages/demo/index.tsx.backup，无法复制 demo 页面')
-        }
-        sh 'cp src/pages/demo/index.tsx.backup src/pages/demo/index.tsx'
-        def npmRegistry = params.NPM_REGISTRY?.trim() ?: 'https://registry.npmjs.org/'
-        withEnv(["NPM_CONFIG_REGISTRY=${npmRegistry}"]) {
-            sh 'yarn install'
-            sh 'yarn run build'
-        }
-        if (!fileExists('dist')) {
-            error('前端构建未生成 dist 目录')
-        }
-        dir('dist') {
-            stash name: 'ui-dist', includes: '**'
+    def nodeModulesDir = params.nodeModuleDir?.trim() ?: env.NODE_MODULE_DIR?.trim()
+    if (!nodeModulesDir) {
+        error('nodeModuleDir 参数或 NODE_MODULE_DIR 环境变量不能为空')
+    }
+    if (fileExists('media-ui/node_modules')) {
+        error('前端工程中已存在 node_modules，无法安全切换依赖目录')
+    }
+
+    withEnv(["NODE_MODULES_DIR=${nodeModulesDir}"]) {
+        sh(
+            label: '移入前端依赖目录',
+            script: '''
+                set -e
+                if [ -e "$NODE_MODULES_DIR" ]; then
+                    if [ ! -d "$NODE_MODULES_DIR" ]; then
+                        echo "nodeModuleDir 不是目录: $NODE_MODULES_DIR" >&2
+                        exit 1
+                    fi
+                    mv "$NODE_MODULES_DIR" media-ui/node_modules
+                fi
+            '''
+        )
+
+        dir('media-ui') {
+            if (!fileExists('src/pages/demo/index.tsx.backup')) {
+                error('缺少 src/pages/demo/index.tsx.backup，无法复制 demo 页面')
+            }
+            sh 'cp src/pages/demo/index.tsx.backup src/pages/demo/index.tsx'
+            def npmRegistry = params.npmRegistry?.trim() ?: 'https://registry.npmjs.org/'
+            withEnv(["NPM_CONFIG_REGISTRY=${npmRegistry}"]) {
+                if (!fileExists('node_modules')) {
+                    sh 'yarn install'
+                } else {
+                    echo '已存在 node_modules，跳过 yarn install'
+                }
+                sh 'yarn run build'
+            }
+            if (!fileExists('dist')) {
+                error('前端构建未生成 dist 目录')
+            }
+            dir('dist') {
+                stash name: 'ui-dist', includes: '**'
+            }
         }
     }
 }
 
 def assemble() {
     def modules = ['common', 'service', 'web', 'dataaccess', 'config']
-    def appJar = "media-${params.BRANCH}-${env.BUILD_VERSION}-${env.SERVER_REVISION}-${env.UI_REVISION}.jar"
-    def cliJar = "cli-${params.BRANCH}-${env.BUILD_VERSION}-${env.SERVER_REVISION}.jar"
+    def appJar = "media-${params.branch}-${env.BUILD_VERSION}-${env.SERVER_REVISION}-${env.UI_REVISION}.jar"
+    def cliJar = "cli-${params.branch}-${env.BUILD_VERSION}-${env.SERVER_REVISION}.jar"
     env.APP_JAR = appJar
     env.CLI_JAR = cliJar
     echo "web 程序 jar 包: ${appJar}"
@@ -109,9 +137,6 @@ def assemble() {
         },
         '命令行 jar': {
             sh "mv media/cli/target/*.jar app/${cliJar}"
-        },
-        'Maven 依赖': {
-            sh 'mv media/application/target/dependency/* app/lib/'
         },
         '模块 jar': {
             modules.each { module ->
@@ -132,34 +157,101 @@ def createStartScripts() {
     }
 }
 
+def preserveRootNodeModules() {
+    def nodeModulesDir = params.nodeModuleDir?.trim() ?: env.NODE_MODULE_DIR?.trim()
+    if (!nodeModulesDir) {
+        error('nodeModuleDir 参数或 NODE_MODULE_DIR 环境变量不能为空')
+    }
+
+    withEnv(["NODE_MODULES_DIR=${nodeModulesDir}"]) {
+        sh(
+            label: '保护现有前端依赖',
+            script: '''
+                set -e
+                if [ -d node_modules ]; then
+                    source_dir=$(cd node_modules && pwd -P)
+                    target_parent=$(dirname "$NODE_MODULES_DIR")
+                    mkdir -p "$target_parent"
+                    target_dir="$(cd "$target_parent" && pwd -P)/$(basename "$NODE_MODULES_DIR")"
+                    if [ "$source_dir" = "$target_dir" ]; then
+                        echo "依赖目录已在目标位置: $NODE_MODULES_DIR"
+                    elif [ -e "$NODE_MODULES_DIR" ]; then
+                        echo "依赖目录目标已存在，不覆盖: $NODE_MODULES_DIR" >&2
+                        exit 1
+                    else
+                        mv -n node_modules "$NODE_MODULES_DIR"
+                        if [ -e node_modules ]; then
+                            echo "依赖目录未能移动到目标位置: $NODE_MODULES_DIR" >&2
+                            exit 1
+                        fi
+                    fi
+                fi
+            '''
+        )
+    }
+}
+
+def workspaceCleanupExclusions() {
+    def nodeModuleDir = params.nodeModuleDir?.trim() ?: env.NODE_MODULE_DIR?.trim()
+    if (!nodeModuleDir) {
+        error('nodeModuleDir 参数或 NODE_MODULE_DIR 环境变量不能为空')
+    }
+
+    def workspacePath = pwd().replace('\\', '/').replaceAll('/+$', '')
+    def configuredPath = nodeModuleDir.replace('\\', '/')
+    def relativePath = null
+    def isAbsolute = configuredPath.startsWith('/') || (configuredPath ==~ /^[A-Za-z]:\/.*/)
+
+    if (isAbsolute) {
+        def normalizedWorkspace = workspacePath.toLowerCase()
+        def normalizedConfigured = configuredPath.toLowerCase()
+        if (normalizedConfigured == normalizedWorkspace) {
+            error('nodeModuleDir 不能指向整个工作目录')
+        }
+        if (normalizedConfigured.startsWith("${normalizedWorkspace}/")) {
+            relativePath = configuredPath.substring(workspacePath.length() + 1)
+        }
+    } else if (configuredPath != '..' && !configuredPath.startsWith('../')) {
+        relativePath = configuredPath
+    }
+
+    if (!relativePath) {
+        return []
+    }
+
+    return [
+        [pattern: relativePath, type: 'EXCLUDE'],
+        [pattern: "${relativePath}/**", type: 'EXCLUDE']
+    ]
+}
+
 
 pipeline {
     agent any
 
     options {
         disableConcurrentBuilds()
-        buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '5'))
         timeout(time: 3, unit: 'HOURS')
     }
 
     parameters {
-        choice(name: 'BRANCH', choices: ['feature', 'master'], description: '打包分支')
-        string(name: 'SERVER_REPO', defaultValue: 'git@github.com:bytechaocai/media.git', description: '后端代码仓库')
-        string(name: 'UI_REPO', defaultValue: 'git@github.com:bytechaocai/media-ui.git', description: '前端代码仓库')
-        string(name: 'RELEASE_VERSION', defaultValue: '', description: '发行版号。留空时使用 git describe --tags HEAD')
-        string(name: 'NPM_REGISTRY', defaultValue: 'https://registry.npmjs.org/', description: 'npm 镜像地址，默认使用 npm 官方源')
+        choice(name: 'branch', choices: ['feature', 'master'], description: '打包分支')
+        string(name: 'serverRepo', defaultValue: 'git@github.com:bytechaocai/media.git', description: '后端代码仓库')
+        string(name: 'uiRepo', defaultValue: 'git@github.com:bytechaocai/media-ui.git', description: '前端代码仓库')
+        string(name: 'releaseVersion', defaultValue: '', description: '发行版号。留空时使用 git describe --tags HEAD')
+        string(name: 'npmRegistry', defaultValue: 'https://registry.npmjs.org/', description: 'Yarn registry 地址，默认使用官方源')
+        string(name: 'nodeModuleDir', defaultValue: "${env.NODE_MODULE_DIR ?: 'node_modules'}", description: '依赖缓存目录；工作区相对路径或构建节点上的绝对路径，默认读取 NODE_MODULE_DIR 环境变量')
+        booleanParam(name: 'copyDependencies', defaultValue: true, description: '是否将后端第三方依赖复制到发行包')
+        booleanParam(name: 'fingerprint', defaultValue: false, description: '是否为归档制品生成指纹')
     }
 
     stages {
         stage('清理工作目录') {
             steps {
                 script {
-                    ['media', 'media-ui', 'app'].each { name ->
-                        echo "清理目录: ${name}"
-                        dir(name) {
-                            deleteDir()
-                        }
-                    }
+                    preserveRootNodeModules()
+                    cleanWs(deleteDirs: true, patterns: workspaceCleanupExclusions())
                     sh 'mkdir -p app/lib'
                 }
             }
@@ -170,10 +262,10 @@ pipeline {
                 script {
                     parallel(
                         '后端代码': {
-                            checkoutRepo('media', params.SERVER_REPO, params.BRANCH)
+                            checkoutRepo('media', params.serverRepo, params.branch)
                         },
                         '前端代码': {
-                            checkoutRepo('media-ui', params.UI_REPO, params.BRANCH)
+                            checkoutRepo('media-ui', params.uiRepo, params.branch)
                         }
                     )
                 }
@@ -201,8 +293,12 @@ pipeline {
                             }
                         },
                         'Maven 依赖复制': {
-                            dir('media/application') {
-                                sh 'mvn -B dependency:copy-dependencies'
+                            if (params.copyDependencies) {
+                                dir('media/application') {
+                                    sh 'mvn -B dependency:copy-dependencies -DoutputDirectory=../../app/lib'
+                                }
+                            } else {
+                                echo '已跳过后端第三方依赖复制'
                             }
                         }
                     )
@@ -213,9 +309,35 @@ pipeline {
         stage('复制前端产物') {
             steps {
                 script {
-                    dir('media/application/src/main/resources/static') {
-                        unstash 'ui-dist'
-                    }
+                    parallel(
+                        '复制前端产物': {
+                            dir('media/application/src/main/resources/static') {
+                                unstash 'ui-dist'
+                            }
+                        },
+                        '移回前端依赖': {
+                            def nodeModulesDir = params.nodeModuleDir?.trim() ?: env.NODE_MODULE_DIR?.trim()
+                            if (!nodeModulesDir) {
+                                error('nodeModuleDir 参数或 NODE_MODULE_DIR 环境变量不能为空')
+                            }
+                            withEnv(["NODE_MODULES_DIR=${nodeModulesDir}"]) {
+                                sh(
+                                    label: '移回前端依赖目录',
+                                    script: '''
+                                        set -e
+                                        if [ -d media-ui/node_modules ]; then
+                                            mkdir -p "$(dirname "$NODE_MODULES_DIR")"
+                                            if [ -e "$NODE_MODULES_DIR" ]; then
+                                                echo "恢复依赖目录时目标位置已存在: $NODE_MODULES_DIR" >&2
+                                                exit 1
+                                            fi
+                                            mv media-ui/node_modules "$NODE_MODULES_DIR"
+                                        fi
+                                    '''
+                                )
+                            }
+                        }
+                    )
                 }
             }
         }
@@ -248,7 +370,7 @@ pipeline {
 
         stage('归档产物') {
             steps {
-                archiveArtifacts artifacts: 'app/**', fingerprint: true, allowEmptyArchive: false
+                archiveArtifacts artifacts: 'app/**', fingerprint: params.fingerprint, allowEmptyArchive: false
             }
         }
     }
